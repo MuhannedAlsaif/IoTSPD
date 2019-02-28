@@ -4,15 +4,29 @@
 #define ANALOG_ADC1_0_VP 36
 #define ANALOG_ADC2_8_25 25
 
+// LED pins
+#define ledA 2
+#define ledB 0
+#define ledC 4
+#define LED_SAG 17
+#define LED_REFERENCE_MODE 18
+
 #define surgeNumSamples 3 // we need more samples with high sampling frequency to cover one cycle
 #define brownoutNumSamples 350
 #define normalNumSamples 350
 
-#define surgeSamplesDelay 39 // in microseconds.39 us delay + 11 us of taking samples (processing time) = approximately 50 us
+
+
+#define surgeSamplesDelay 39 // in microseconds -- 39 us delay + 11 us of taking samples (processing time) = approximately 50 us
 #define brownoutSamplesDelay 39 //
 #define normalSamplesDelay 39 //
 
-#define SurgeADCvalueThreshold 50  // simplify calculations, use adc value for now
+#define SurgeADCvalueThreshold 9999  // CORRECT VALUE IS 600 FOR TESTING PURPOSES simplify calculations, use adc value for now
+
+ 
+// Sag functions
+#define SAG_CUTOFF_PERCENTAGE 90 // there is voltage sag if ac signal 90% or less than ac reference
+
 
 // FreeRTOS
 TaskHandle_t Task1;
@@ -21,10 +35,7 @@ TaskHandle_t Task2;
 EventGroupHandle_t BuffersEventGroup;  //flags
 EventBits_t BufferFlags;
 
-// LED pins
-const int ledA = 2;
-const int ledB = 0;
-const int ledC = 4;
+
 
 //Globals for surge sampling
 int g_surgeCounter = 0;
@@ -33,6 +44,10 @@ int g_BufferB[surgeNumSamples]; //
 int g_BufferC[surgeNumSamples]; // 
 unsigned long timeVal[surgeNumSamples]; // WILL BE DELETED OR EXAPNDED FOR all buffers
 
+//Globals for refernce
+int g_reference_max;
+int g_reference_min;
+int g_reference_offset;
 
 
 
@@ -41,7 +56,10 @@ void setup() {
   Serial.begin(115200); 
   pinMode(ledA, OUTPUT);
   pinMode(ledB, OUTPUT);
-
+  pinMode(ledC, OUTPUT);
+  pinMode(LED_SAG, OUTPUT);
+  pinMode(LED_REFERENCE_MODE, OUTPUT);
+    
   BuffersEventGroup = xEventGroupCreate(); //test 
 
   Serial.print("void should be running on core ");
@@ -111,11 +129,12 @@ void Task1code( void * pvParameters ){
 
 
 
-    delay(2000); // to make the watchdog timer happy
-    Serial.print("task 1 loop...:");
-    Serial.print(g_surgeCounter);
-    Serial.print("  -  ");
-    Serial.println(L_surgeCounter);
+    delay(2500); // to make the watchdog timer happy
+    
+ //   Serial.print("task 1 loop...:");
+ //   Serial.print(g_surgeCounter);
+ //   Serial.print("  -  ");
+ //   Serial.println(L_surgeCounter);
     
   } // End of Task 1 loop
 }  // End of Task 1
@@ -125,6 +144,10 @@ void Task1code( void * pvParameters ){
 // core 1
 void loop() {
 
+
+ // digitalWrite(LED_SAG, HIGH);
+
+  
     // check for surges
     if (  (BIT_A & (BufferFlags = xEventGroupGetBits(BuffersEventGroup)))  == (BIT_A)   ){ // if buffer has values
           process_surge(g_BufferA);
@@ -144,15 +167,107 @@ void loop() {
      digitalWrite(ledC, LOW);
      xEventGroupClearBits(BuffersEventGroup, BIT_C ); 
     }
-    delay(10000);
+
+
+
+    delay(5000);
 
  //   medium_adc();
+   //  reference_mode(); add global for referencing once OR use GPIO to start this (simulate push butten)
     
     
   
 }
 
 //-----------------------------------------------------------------------------------------
+bool  measure_ac(){ // NOT COMPLETE YET
+  // for fast adc sampling
+  int index = 0;
+  int l_adc_max = 0;
+  int l_adc_min = 4095;
+  int l_adc_offset = 0;
+  int tmp;
+  unsigned long time1 = 0;
+  unsigned long time2 = 0;
+  unsigned long time3 = 0;
+
+
+  // no LED
+ // digitalWrite(LED_REFERENCE_MODE, HIGH); // show that we entered reference mode
+ 
+   while (index<10000){ // measure adc for 1000 times then stop
+      tmp = analogRead(ANALOG_ADC2_8_25);
+      if(tmp>l_adc_max) l_adc_max = tmp;
+      if(tmp<l_adc_min) l_adc_min = tmp;
+      index++;
+      delayMicroseconds(100); // with previouus procesing we get a delay of 100 us
+    }
+
+    l_adc_offset = (l_adc_max + l_adc_min)/2;
+
+    // calculate period...use max or min +- error...once found record time and ignore the next few samples 
+    // then look for max (or min) again +-error then record second time once foud
+    while (index<750){ // measure adc for 1000 times then stop
+      tmp = analogRead(ANALOG_ADC2_8_25);
+      if(tmp>l_adc_max) l_adc_max = tmp;
+      if(tmp<l_adc_min) l_adc_min = tmp;
+      index++;
+      delayMicroseconds(50); // with previouus procesing we get a delay of 100 us
+    }
+    
+
+
+  // delay(1000); // Just so we can observe it
+   
+   Serial.print("Voltage peak is: ");
+   Serial.println(l_adc_max);
+   Serial.print("Voltage Offset: ");
+   Serial.println(l_adc_offset);
+   Serial.print("Voltage Period is: ");
+   Serial.println(g_reference_offset);
+   
+   digitalWrite(LED_REFERENCE_MODE, LOW); // show that we exited reference mode
+  
+}
+
+void  reference_mode(){ // NEED A WAY TO CALL THIS ONCE ONLY
+  // for fast adc sampling
+  int index = 0;
+  int l_adc_ref_max = 0;
+  int l_adc_ref_min = 4095;
+  int tmp;
+
+
+  digitalWrite(LED_REFERENCE_MODE, HIGH); // show that we entered reference mode
+ 
+   while (index<10000){ // measure adc for 1000 times then stop
+      tmp = analogRead(ANALOG_ADC2_8_25);
+      if(tmp>l_adc_ref_max) l_adc_ref_max = tmp;
+      if(tmp<l_adc_ref_min) l_adc_ref_min = tmp;
+      index++;
+      delayMicroseconds(100); // with previouus procesing we get a delay of 100 us
+    }
+
+   g_reference_max = l_adc_ref_max;
+   g_reference_min = l_adc_ref_min;
+   g_reference_offset = (l_adc_ref_max + l_adc_ref_min)/2;
+   
+
+
+
+  // delay(1000); // Just so we can observe it
+   
+   Serial.print("max: ");
+   Serial.println(g_reference_max);
+   Serial.print("min: ");
+   Serial.println(g_reference_min);
+   Serial.print("offset: ");
+   Serial.println(g_reference_offset);
+   
+   digitalWrite(LED_REFERENCE_MODE, LOW); // show that we exited reference mode
+  
+}
+
 
 void measure_surges(int * BufferX){
   int index1;
